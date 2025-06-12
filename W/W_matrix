@@ -7,7 +7,7 @@ import os
 # Configuración global
 GAMMA = 1.354
 MACH = 1.7
-FIELDS = ["density", "velocity_x", "velocity_y", "Temp"]
+FIELDS = ["density", "x_velocity", "y_velocity", "Temp"]
 ROI_PARAMS = {
     'threshold': 100.0,
     'window_size': 5,
@@ -107,13 +107,13 @@ def build_compressible_W_with_roi(mean_fields, cell_volume, dims):
 
 if __name__ == "__main__":
     # 1. Cargar snapshots
-    root = "../../Simulaciones/S0.1"
+    root = "../../../Simulations/S0.1"
     files = sorted([f for f in os.listdir(root) if "pltAMR2NSW_" in f], 
                   key=lambda x: int(x.split("_")[-1]))
     
     # 2. Calcular promedios con ROI dinámico (usar subset para eficiencia)
-    subset = files[::max(1, len(files)//100)]  # Muestrear ~100 snapshots
-    mean_fields, dV, dims = calculate_mean_fields_with_roi(subset, root)
+    #subset = files[::max(1, len(files)//100)]  # Muestrear ~100 snapshots
+    mean_fields, dV, dims = calculate_mean_fields_with_roi(files, root)
     
     # 3. Construir W
     W = build_compressible_W_with_roi(mean_fields, dV, dims)
