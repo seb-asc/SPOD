@@ -10,7 +10,7 @@ import os
 GAMMA = 1.354       # Ratio de calores específicos (γ) para tu fluido
 MACH = 1.7          # Número de Mach característico
 FIELDS = ["density", "x_velocity", "y_velocity", "Temp"]  # Campos AMReX
-DATA_PATH = "../Simulations/S0.1_TEST"  # Ruta a tus archivos plt*
+DATA_PATH = "../../Simulations/S0.1_TEST"  # Ruta a tus archivos plt*
 
 # ========================================================================
 # FUNCIÓN PARA CARGAR PROMEDIOS DESDE AMReX
