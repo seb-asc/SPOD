@@ -4,9 +4,6 @@ import yt
 from tqdm import tqdm
 import os
 
-Dimensiones de W: (33554432, 33554432)
-Elementos no cero: 33554432
-
 # ========================================================================
 # CONFIGURACIÓN GLOBAL (AJUSTAR SEGÚN TU CASO)
 # ========================================================================
