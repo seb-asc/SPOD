@@ -4,134 +4,122 @@ import yt
 from tqdm import tqdm
 import os
 
-# ========================================================================
-# CONFIGURACIÓN GLOBAL (AJUSTAR SEGÚN TU CASO)
-# ========================================================================
-GAMMA = 1.354       # Ratio de calores específicos (γ) para tu fluido
-MACH = 1.7          # Número de Mach característico
-FIELDS = ["density", "x_velocity", "y_velocity", "Temp"]  # Campos AMReX
-DATA_PATH = "../../Simulations/S0.1_TEST"  # Ruta a tus archivos plt*
+# Configuración global
+GAMMA = 1.354
+MACH = 1.7
+FIELDS = ["density", "velocity_x", "velocity_y", "Temp"]
+ROI_PARAMS = {
+    'threshold': 100.0,
+    'window_size': 5,
+    'preset': 75,
+    'offset': 1125
+}
 
-# ========================================================================
-# FUNCIÓN PARA CARGAR PROMEDIOS DESDE AMReX
-# ========================================================================
-def load_mean_fields(snapshot_files, max_level=2):
-    """Calcula campos medios temporales desde datos AMReX"""
-    first_ds = yt.load(os.path.join(DATA_PATH, snapshot_files[0]))
+def calculate_mean_fields_with_roi(snapshot_files, root_path, max_level=2):
+    """Calcula campos medios aplicando ROI dinámico en cada snapshot"""
+    first_ds = yt.load(os.path.join(root_path, snapshot_files[0]))
     
-    # Configuración de grilla
+    # Configuración de grilla base
     ref = int(np.prod(first_ds.ref_factors[0:max_level]))
     low = first_ds.domain_left_edge
     dims = first_ds.domain_dimensions * ref
-    nx, ny, _ = dims
+    nx = dims[0]
     
     # Inicializar acumuladores
-    accum = {field: np.zeros((nx, ny)) for field in FIELDS}
-    cell_volumes = None
+    accum = {field: [] for field in FIELDS}  # Usamos listas por ROI variable
+    roi_height = ROI_PARAMS['preset'] + ROI_PARAMS['offset']
     
     # Procesar cada snapshot
-    for file in tqdm(snapshot_files, desc="Calculando promedios"):
-        ds = yt.load(os.path.join(DATA_PATH, file))
+    for file in tqdm(snapshot_files, desc="Calculando promedios con ROI dinámico"):
+        ds = yt.load(os.path.join(root_path, file))
         cube = ds.covering_grid(max_level, left_edge=low, dims=dims, 
                               fields=[("boxlib", f) for f in FIELDS])
         
-        # Acumular campos (solo plano xy, asumiendo 2D)
+        # Detección dinámica de ROI (igual que en Q_hat)
+        temp = cube[("boxlib", "Temp")].d[:, :, 0]
+        profile = temp[0, :]
+        diff_avg = np.convolve(np.diff(profile), 
+                            np.ones(2*ROI_PARAMS['window_size']+1)/(2*ROI_PARAMS['window_size']+1), 
+                            mode='same')
+        base_candidates = np.where(diff_avg > ROI_PARAMS['threshold'])[0]
+        
+        if len(base_candidates) == 0:
+            base_index = dims[1] // 2
+        else:
+            base_index = base_candidates[0]
+        
+        lower_bound = max(0, base_index - ROI_PARAMS['preset'])
+        upper_bound = min(dims[1], base_index + ROI_PARAMS['offset'])
+        
+        # Extraer ROI para cada campo
         for field in FIELDS:
-            accum[field] += cube[("boxlib", field)].d[:, :, 0]
+            roi = cube[("boxlib", field)].d[:, lower_bound:upper_bound, 0]
+            accum[field].append(roi)
+    
+    # Calcular promedios asegurando dimensiones consistentes
+    mean_fields = {}
+    for field in FIELDS:
+        # Encontrar altura máxima de ROI en todos los snapshots
+        max_ny = max(roi.shape[1] for roi in accum[field])
         
-        # Obtener volúmenes (solo en primera iteración)
-        if cell_volumes is None:
-            if hasattr(cube, 'dx'):
-                cell_volumes = cube.dx * cube.dy * cube.dz
-            else:
-                cell_volume = ds.domain_width / ds.domain_dimensions
-                cell_volumes = np.prod(cell_volume) * np.ones((nx, ny))
+        # Aplicar padding y calcular promedio
+        padded_rois = []
+        for roi in accum[field]:
+            if roi.shape[1] < max_ny:
+                pad_width = ((0, 0), (0, max_ny - roi.shape[1]))
+                roi = np.pad(roi, pad_width, mode='constant', constant_values=0)
+            padded_rois.append(roi)
+        
+        mean_fields[field] = np.mean(padded_rois, axis=0)
     
-    # Calcular promedios finales
-    mean_fields = {
-        "rho": accum["density"] / len(snapshot_files),
-        "T": accum["Temp"] / len(snapshot_files),
-        "vx": accum["x_velocity"] / len(snapshot_files),
-        "vy": accum["y_velocity"] / len(snapshot_files)
-    }
+    # Obtener volúmenes de celda (asumiendo malla uniforme)
+    if 'dx' in dir(cube):
+        dV = cube.dx * cube.dy * cube.dz
+    else:
+        dV = np.prod(ds.domain_width / ds.domain_dimensions)
     
-    return mean_fields, cell_volumes, dims
+    return mean_fields, dV, mean_fields["density"].shape
 
-# ========================================================================
-# CONSTRUCCIÓN DE LA MATRIZ W COMPRESIBLE
-# ========================================================================
-def build_compressible_W(mean_fields, cell_volumes, dims):
-    """
-    Construye la matriz W para norma de energía compresible
-    
-    Args:
-        mean_fields: Diccionario con:
-            - "rho": Array 2D de densidad media
-            - "T": Array 2D de temperatura media
-        cell_volumes: Array 2D con volúmenes de celda
-        dims: Tupla (nx, ny, nz) con dimensiones espaciales
-        
-    Returns:
-        W: Matriz dispersa CSR de tamaño (4*nx*ny, 4*nx*ny)
-    """
-    nx, ny = dims[0], dims[1]
+def build_compressible_W_with_roi(mean_fields, cell_volume, dims):
+    """Construye W considerando ROI dinámico"""
+    nx, ny = dims
     n_points = nx * ny
     
-    # 1. Calcular pesos para cada componente
-    rho_mean = mean_fields["rho"]
-    T_mean = mean_fields["T"]
+    # Calcular pesos
+    rho_mean = mean_fields["density"]
+    T_mean = mean_fields["Temp"]
     
-    # Pre-cálculo de términos comunes
-    gamma_M2 = GAMMA * MACH**2
-    common_denominator = GAMMA * (GAMMA - 1) * T_mean * MACH**2
-    
-    # Pesos individuales (flatten para eficiencia)
-    w_rho = (T_mean / (gamma_M2 * rho_mean)).flatten()
+    w_rho = (T_mean / (GAMMA * rho_mean * MACH**2)).flatten()
     w_vel = rho_mean.flatten()
-    w_temp = (rho_mean / common_denominator).flatten()
+    w_temp = (rho_mean / (GAMMA * (GAMMA-1) * T_mean * MACH**2)).flatten()
     
-    # 2. Construir diagonal principal (orden: ρ, vx, vy, T para cada punto)
+    # Construir diagonal
     diagonal = np.empty(4 * n_points)
-    diagonal[0::4] = w_rho    # Densidad
-    diagonal[1::4] = w_vel    # Velocidad x
-    diagonal[2::4] = w_vel    # Velocidad y
-    diagonal[3::4] = w_temp   # Temperatura
+    diagonal[0::4] = w_rho    # ρ
+    diagonal[1::4] = w_vel    # vx
+    diagonal[2::4] = w_vel    # vy
+    diagonal[3::4] = w_temp   # T
     
-    # 3. Aplicar volúmenes de celda
-    if isinstance(cell_volumes, np.ndarray):
-        dV_flat = cell_volumes.flatten()
-        diagonal *= np.repeat(dV_flat, 4)
-    else:
-        diagonal *= cell_volumes
+    # Aplicar volumen de celda
+    diagonal *= cell_volume
     
-    # 4. Crear matriz dispersa (formato CSR para operaciones eficientes)
-    W = diags(diagonal, 0, format='csr')
-    
-    return W
+    return diags(diagonal, 0, format='csr')
 
-# ========================================================================
-# EJECUCIÓN PRINCIPAL
-# ========================================================================
 if __name__ == "__main__":
-    # 1. Cargar lista de snapshots
-    snapshot_files = [f for f in os.listdir(DATA_PATH) if f.startswith("plt")]
-    snapshot_files = sorted(snapshot_files, key=lambda x: int(x.split("_")[-1]))
+    # 1. Cargar snapshots
+    root = "../../Simulaciones/S0.1"
+    files = sorted([f for f in os.listdir(root) if "pltAMR2NSW_" in f], 
+                  key=lambda x: int(x.split("_")[-1]))
     
-    # 2. Calcular campos medios (¡Hacer esto solo una vez!)
-    print("\nCalculando campos medios...")
-    mean_fields, cell_volumes, dims = load_mean_fields(snapshot_files)
+    # 2. Calcular promedios con ROI dinámico (usar subset para eficiencia)
+    subset = files[::max(1, len(files)//100)]  # Muestrear ~100 snapshots
+    mean_fields, dV, dims = calculate_mean_fields_with_roi(subset, root)
     
-    # 3. Construir matriz W
-    print("\nConstruyendo matriz W...")
-    W = build_compressible_W(mean_fields, cell_volumes, dims)
+    # 3. Construir W
+    W = build_compressible_W_with_roi(mean_fields, dV, dims)
     
-    # 4. Verificación
-    print(f"\nMatriz W construida exitosamente!")
-    print(f"Dimensiones: {W.shape}")
-    print(f"Elementos no cero: {W.count_nonzero()}")
-    print(f"Patrón de ejemplo (primeros 16 elementos diagonales):")
-    print(W.diagonal()[:16].reshape(4, 4))  # Muestra pesos para primeros 4 puntos
-
-    # 5. Guardar matriz (opcional)
+    # 4. Guardar (opcional)
     from scipy.sparse import save_npz
-    save_npz("W_compressible_gamma1.354_Mach1.7.npz", W)
+    save_npz(f"W_compressible_gamma{GAMMA}_Mach{MACH}_ROI.npz", W)
+    
+    print(f"Matriz W construida con ROI dinámico. Dimensiones: {W.shape}")
