@@ -37,24 +37,31 @@ def load_frequency_data(freq_idx, Q_hat_files, spatial_dims):
     return Q_k
 
 def process_frequency(args):
-    freq_idx, Q_hat_files, W_diag, spatial_dims = args
+    freq_idx, Q_hat_files, W_sparse, spatial_dims = args
     
     try:
-        # 1. Cargar Q̂ para esta frecuencia (shape: M×N)
-        Q_k = load_frequency_data(freq_idx, Q_hat_files, spatial_dims)
+        # 1. Cargar Q̂ (shape: M×N)
+        Q_k = load_frequency_data(freq_idx, Q_hat_files, spatial_dims)  # (M, N)
         N = Q_k.shape[1]
 
-        # 2. Calcular Q̂^H W Q̂ (método de snapshots)
-        W_Q = Q_k * W_diag[None, :]  # W Q̂ (diagonal weight)
-        weighted_C = Q_k.conj().T @ W_Q  # Q̂^H W Q̂ (N×N)
+        # 2. Calcular W Q̂ (eficiente para W sparse)
+        if isinstance(W_sparse, np.ndarray):
+            # W es diagonal (vector)
+            W_Q = Q_k * W_sparse.reshape(-1, 1)  # Broadcasting
+        else:
+            # W es matriz sparse (ej: CSR)
+            W_Q = W_sparse @ Q_k  # Multiplicación sparse-densa
 
-        # 3. Resolver el problema de autovalores
+        # 3. Calcular Q̂^H W Q̂ (N×N)
+        weighted_C = Q_k.conj().T @ W_Q  # (N, N)
+
+        # 4. Resolver problema de autovalores
         eigvals, eigvecs = eigh(weighted_C)
-        idx = np.argsort(eigvals)[::-1]  # Orden descendente
+        idx = np.argsort(eigvals)[::-1]
         eigvals = eigvals[idx]
         eigvecs = eigvecs[:, idx]
 
-        # 4. Calcular modos SPOD: Φ = Q̂ Ψ̂ Λ^{-1/2}
+        # 5. Modos SPOD: Φ = Q̂ Ψ̂ Λ^{-1/2}
         Phi = Q_k @ eigvecs @ np.diag(1.0 / np.sqrt(eigvals))
 
         return freq_idx, eigvals, Phi
@@ -62,9 +69,7 @@ def process_frequency(args):
     except Exception as e:
         print(f"Error en frecuencia {freq_idx}: {str(e)}")
         return freq_idx, None, None
-    finally:
-        gc.collect()
-
+        
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
