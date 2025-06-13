@@ -20,8 +20,8 @@ ROI_PARAMS = {
     'offset': 1125
 }
 MAX_CORES = 64                     # Máximo de cores a usar
-SNAPSHOTS_PER_BATCH = 50           # Procesar en lotes para evitar OOM
-CHUNK_SIZE = 4                     # Tamaño de chunk para multiprocessing
+SNAPSHOTS_PER_BATCH = 5           # Procesar en lotes para evitar OOM
+CHUNK_SIZE = 16                     # Tamaño de chunk para multiprocessing
 
 # =============================================================================
 # FUNCIÓN PARA PROCESAR UN SNAPSHOT INDIVIDUAL (PARALELIZABLE)
