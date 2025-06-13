@@ -16,37 +16,38 @@ MAX_RAM_USAGE = 20  # GB
 BUFFER_SIZE = 1   # Ajustar según RAM disponible
 
 def load_frequency_data(freq_idx, Q_hat_files, spatial_dims):
-    """Carga datos para una frecuencia específica"""
+    """Versión corregida para construir Q_k"""
     nx, ny = spatial_dims
     n_vars = len(VARIABLES)
     M = nx * ny * n_vars
-    N = len(Q_hat_files)
+    N = len(Q_hat_files)  # Número de bloques
     
     Q_k = np.zeros((M, N), dtype=np.complex128)
     
     for block_idx, block_files in enumerate(Q_hat_files):
-        block_data = []
+        # Cargar todas las variables para este bloque y frecuencia
+        var_data = []
         for var_file in block_files:
-            # Carga directa sin mmap (solución al problema)
-            data = np.load(var_file)
-            block_data.append(data[:, :, freq_idx].flatten())
+            data = np.load(var_file)[:, :, freq_idx]  # Forma (512, 1200)
+            var_data.append(data.flatten())  # Aplanar a (614400,)
             data = None  # Liberar memoria
-            
-        Q_k[:, block_idx] = np.concatenate(block_data)
+        
+        # Concatenar variables verticalmente: [ρ; vx; vy; T]
+        Q_k[:, block_idx] = np.concatenate(var_data)  # Forma (2457600,)
     
     return Q_k
-
+    
 def process_frequency(args):
-    """Procesa una frecuencia individual"""
     freq_idx, Q_hat_files, W_diag, spatial_dims = args
     
     try:
-        # 1. Cargar datos para esta frecuencia
         Q_k = load_frequency_data(freq_idx, Q_hat_files, spatial_dims)
         
-        # 2. Calcular matriz de covarianza
-        W_Q = Q_k.conj().T * W_diag[:, None]
-        C_snap = (1/(Q_k.shape[1]-1)) * (Q_k.conj().T @ W_Q)
+        # Versión CORRECTA del producto W Q_k:
+        W_Q = (Q_k * W_diag[None, :]).conj().T  # Forma (N, M)
+        
+        # Matriz de covarianza
+        C_snap = (1/(N-1)) * (W_Q @ Q_k)  # (N, N)
         
         # 3. Descomposición espectral
         eigvals, eigvecs = eigh(C_snap)
