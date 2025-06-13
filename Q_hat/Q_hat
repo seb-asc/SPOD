@@ -140,8 +140,8 @@ def process_variable(field, files, root):
 
 def main():
     set_yt_threads(1)
-    root = "../../Simulaciones/S0.1"
-    fields = ["density", "x_velocity", "y_velocity", "Temp"]
+    root = "../../Simulations/S0.1"
+    fields = ["y_velocity", "Temp"]
     
     files = [f for f in os.listdir(root) if "pltAMR2NSW_" in f]
     files = sorted(files, key=lambda s: int(s.split("_")[-1]))
