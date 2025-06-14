@@ -1,2 +1,9 @@
 Se busca aplicar SPOD a una simulación de la interacción de onda de choque y llama para identificar estructuras coherentes y modos energéticos dominantes.
-Error procesando frecuencia 0: operands could not be broadcast together with shapes (2457600,3) (1,2457600)
+
+Correr los scripts en el siguiente orden:
+1. q^
+2. Q^
+3. W_matrix
+4. W_diagonal
+5. W-Q
+6. Q^H-W-Q
